@@ -101,7 +101,7 @@
     !  Read initial parameters.
 
     call DarkEnergy_ReadParams(DefIni)
-
+    
     P%h0     = Ini_Read_Double('hubble')
 
     if (Ini_Read_Logical('use_physical',.false.)) then

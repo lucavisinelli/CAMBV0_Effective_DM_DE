@@ -22,16 +22,13 @@
     use precision
     implicit none
 
-    real(dl)  :: w_lam  = -1_dl !p/rho for the dark energy (assumed constant)
+    real(dl) :: w_lam   = -1_dl !p/rho for the dark energy (assumed constant)
     real(dl) :: a_dec   = 0.1_dl
     real(dl) :: w_width = 0.1_dl
-    real(dl) :: ratC    = 0.1_dl
-    real(dl) :: ratQ
+    real(dl) :: fracL   = 0.1_dl
+    real(dl) :: fracQ
     real(dl) :: cs2_lam
-    !comoving sound speed. Always exactly 1 for quintessence
-    !(otherwise assumed constant, though this is almost certainly unrealistic)
-
-    real(dl), parameter :: wa_ppf = 0._dl !Not used here, just for compatibility with e.g. halofit
+    real(dl), parameter :: wa_ppf = 0._dl
 
     logical :: w_perturb = .true.
     logical :: use_tabulated_w = .false.
@@ -45,9 +42,9 @@
 
     w_lam   = Ini_Read_Double_File(Ini,'w',      -1.d0  )
     a_dec   = Ini_Read_Double_File(Ini,'a_dec',   1.d-1 )
-    w_width = Ini_Read_Double_File(Ini,'w_width', 1.d-1 )
-    ratC    = Ini_Read_Double_File(Ini,'ratC',    1.d-1)
-    ratQ    = 1_dl -ratC
+    w_width = Ini_Read_Double_File(Ini,'w_width', 5.d-1 )
+    fracL   = Ini_Read_Double_File(Ini,'fracL', 5.d-1 )
+    fracQ   = 1._dl - fracL
 
     end subroutine DarkEnergy_ReadParams
 
@@ -55,26 +52,32 @@
     real(dl) :: w_de, al
     real(dl), intent(IN) :: a
 
-       w_de = w_lam/(1 + EXP( -2*LOG(a/a_dec)/w_width) )
+       w_de = w_lam/(1._dl + (a/a_dec)**(-2._dl/w_width))
 
-    end function w_de  ! equation of state of the PPF DE
+    end function w_de
 
     function grho_de(a)  !8 pi G a^4 rho_de
        real(dl) :: grho_de, al, Log0, Log1, rati
        real(dl), intent(IN) :: a
 
-       Log0 = LOG(1/a_dec)/w_width
-       Log1 = LOG(a/a_dec)/w_width
-       rati = COSH(Log0) / COSH(Log1)
-       if (a > 1e-10) then
-          grho_de = a**(1_dl - 1.5_dl*w_lam) * rati**(1.5_dl*w_lam*w_width) 
-       else
-          grho_de = a*a_dec**3
-       end if
+!       Log0 = LOG(1/a_dec)/w_width
+!       Log1 = LOG(a/a_dec)/w_width
+!       rati = COSH(Log0) / COSH(Log1)
+!       if (a > 1e-10) then
+!          grho_de = a**(1_dl - 1.5_dl*w_lam) * rati**(1.5_dl*w_lam*w_width) 
+!       else
+!          grho_de = a*a_dec**3
+!       end if
+
+       Log0 = 1._dl + (1._dl/a_dec)**(2._dl/w_width)
+       Log1 = 1._dl + (a/a_dec)**(2._dl/w_width)
+       rati = Log0/Log1
+       grho_de = a*rati**(1.5_dl* w_width* w_lam)
 
     end function grho_de
 
     end module LambdaGeneral
+
 
 
     !Return OmegaK - modify this if you add extra fluid components
@@ -92,7 +95,7 @@
     !This is only called once per model, and is a good point to do any extra initialization.
     !It is called before first call to dtauda, but after
     !massive neutrinos are initialized and after GetOmegak
-    is_cosmological_constant = .not. use_tabulated_w .and. w_lam==-1_dl .and. wa_ppf==0._dl .and. ratQ==0
+    is_cosmological_constant = .not. use_tabulated_w .and. w_lam==-1_dl .and. wa_ppf==0._dl .and. fracL==1._dl
     end  subroutine init_background
 
 
@@ -116,7 +119,7 @@
     if (is_cosmological_constant) then
         grhoa2=grhoa2+grhov*a2**2
     else
-        grhoa2=grhoa2 + grhov*(ratQ*grho_de(a) + ratC*a**4)
+        grhoa2=grhoa2 + grhov*(fracQ*grho_de(a) + fracL*a2**2)
     end if
     if (CP%Num_Nu_massive /= 0) then
         !Get massive neutrino density relative to massless
@@ -1801,7 +1804,8 @@
         clxcdot,clxbdot,adotdota,gpres,clxrdot,etak
     real(dl) q,aq,v
     real(dl) G11_t,G30_t, wnu_arr(max_nu)
-    real(dl) dgq,grhob_t,grhor_t,grhoc_t,grhog_t,grhov_t,grhonu_t,sigma,polter
+
+    real(dl) dgq,grhob_t,grhor_t,grhoc_t,grhog_t,grhov_t,grhodv_t,grhophi_t,grhonu_t,sigma,polter
     real(dl) qgdot,qrdot,pigdot,pirdot,vbdot,dgrho,adotoa
     real(dl) a,a2,z,clxc,clxb,vb,clxg,qg,pig,clxr,qr,pir
     real(dl) clxde, qde,  E2, dopacity
@@ -1839,9 +1843,13 @@
     grhor_t=grhornomass/a2
     grhog_t=grhog/a2
     if (is_cosmological_constant) then
-        grhov_t=grhov*a2
+        grhov_t   = grhov*a2
+        grhodv_t  = -grhov_t
+        grhophi_t = 0
     else
-        grhov_t=grhov*(ratQ*grho_de(a) + ratC*a**4)/a2
+        grhov_t   = grhov*(fracQ*grho_de(a)/a2 + fracL*a2)
+        grhodv_t  = grhov*(fracQ*w_de(a)*grho_de(a)/a2 - fracL*a2)
+        grhophi_t = grhov* fracQ*grho_de(a)/a2
     end if
 
     !  Get sound speed and ionisation fraction.
@@ -1851,7 +1859,6 @@
         call thermo(tau,cs2,opacity)
     end if
 
-    !!!! CHECK!!!!!
     gpres_nu=0
     grhonu_t=0
 
@@ -1881,8 +1888,8 @@
     if (.not. is_cosmological_constant) then
         clxde=ay(EV%w_ix)
         qde=ay(EV%w_ix+1)
-        dgrho=dgrho + clxde*grhov_t
-        dgq = dgq + qde*grhov_t
+        dgrho=dgrho + clxde*grhophi_t
+        dgq = dgq + qde*grhophi_t
     end if
 
     if (EV%no_nu_multpoles) then
@@ -1955,7 +1962,7 @@
         w_eff = w_de(a) 
         cs2_lam = abs(w_eff)
         if (w_eff+1>0.001) then
-          wprime = w_lam/(w_width* COSH( LOG(a/a_dec)/w_width)**2) / (2*(1+w_eff))
+          wprime = w_lam/(w_width* COSH( LOG(a/a_dec)/w_width)**2) / (2*(1._dl+w_eff))
         else
           wprime=0
         end if  
@@ -1990,7 +1997,7 @@
 
     if (EV%TightCoupling) then
         !  ddota/a
-        gpres=gpres_nu+ (grhog_t+grhor_t)/3 +grhov_t*(ratQ*w_de(a) + ratC*w_lam)
+        gpres=gpres_nu+ (grhog_t+grhor_t)/3 +grhodv_t
         adotdota=(adotoa*adotoa-gpres)/2
 
         pig = 32._dl/45/opacity*k*(sigma+vb)
@@ -2236,7 +2243,7 @@
                 dgpi_diff=dgpi_diff, pidot_sum=pidot_sum)
         end if
         diff_rhopi = pidot_sum - (4*dgpi+ dgpi_diff)*adotoa
-        gpres=gpres_nu+ (grhog_t+grhor_t)/3 +grhov_t*(ratQ*w_de(a) + ratC*w_lam)
+        gpres=gpres_nu+ (grhog_t+grhor_t)/3 + grhodv_t
 
         phi = -((dgrho +3*dgq*adotoa/k)/EV%Kf(1) + dgpi)/(2*k2)
 
@@ -2333,7 +2340,7 @@
     real(dl) ep,tau,grho,rhopi,cs2,opacity,gpres
     logical finished_tightcoupling
     real(dl), dimension(:),pointer :: neut,neutprime,E,B,Eprime,Bprime
-    real(dl)  grhob_t,grhor_t,grhoc_t,grhog_t,grhov_t,polter
+    real(dl)  grhob_t,grhor_t,grhoc_t,grhog_t,grhov_t,grhodv_t,polter
     real(dl) sigma, qg,pig, qr, vb, rhoq, vbdot, photbar, pb43
     real(dl) k,k2,a,a2, adotdota
     real(dl) pir,adotoa, am3
@@ -2374,14 +2381,16 @@
     grhoc_t=grhoc/a
     grhor_t=grhornomass/a2
     grhog_t=grhog/a2
-        if (a > 1e-10) then
-            grhov_t = grhov*(ratQ*grho_de(a) + ratC*a**4)/a2
-        else
-            grhov_t = 0._dl
-        end if
+!    if (a > 1e-10) then
+        grhov_t  = grhov*(fracQ*grho_de(a)/a2 + fracL*a2)
+        grhodv_t = grhov*(fracQ*w_de(a)*grho_de(a)/a2-fracL*a2)
+!    else
+!        grhov_t  = 0._dl
+!        grhodv_t = 0._dl
+!    end if
 
     grho=grhob_t+grhoc_t+grhor_t+grhog_t+grhov_t
-    gpres=(grhog_t+grhor_t)/3._dl+grhov_t*(ratQ*w_de(a) + ratC*w_lam)
+    gpres=(grhog_t+grhor_t)/3._dl+grhodv_t
 
     adotoa=sqrt(grho/3._dl)
     adotdota=(adotoa*adotoa-gpres)/2
@@ -2391,7 +2400,7 @@
     am3=a**(-3)
     yvprime(1)=adotoa*a
      !   open(unit=50, file="print_background.dat")
-        write(*,*) a, adotoa, grhoc*am3, grhob*am3, grhov_t*a*am3, grhog*am3/a
+     !   write(*,*) a, adotoa, grhoc*am3, grhob*am3, grhov_t*a*am3, grhog*am3/a
      !   close(50)
 
     vb = yv(3)
@@ -2538,7 +2547,7 @@
     if (is_cosmological_constant) then
         grhov_t=grhov*a2
     else
-        grhov_t=grhov*(ratQ*grho_de(a) + ratC*a**4)/a2
+        grhov_t  = grhov*(fracQ*grho_de(a)/a2 + fracL*a2)
     end if
 
     grho=grhob_t+grhoc_t+grhor_t+grhog_t+grhov_t
